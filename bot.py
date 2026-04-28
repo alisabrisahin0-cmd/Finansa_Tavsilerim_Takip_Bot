@@ -1,86 +1,77 @@
-import os
+import datetime
+import asyncio
 import logging
-import yfinance as yf
-import pandas_ta as ta
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 
-# Loglama ayarları
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# 1. LOGLAMA AYARI: Botun çalışmasını ve hataları terminalden izleyebilirsin
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-# Takip Sepeti
-SEPET = {
-    "ALTIN": "GC=F",
-    "GUMUS": "SI=F",
-    "BIST100": "XU100.IS",
-    "NASDAQ": "^IXIC"
-}
+# --- AYARLAR ---
+# Güncellediğin Token ve CHAT_ID
+BOT_TOKEN = "8798725584:AAEJy2sB39ldN50KlOVXKpUnvmGhXobEjTM" 
+MY_CHAT_ID = 915358935
 
-# Analiz Fonksiyonu
-def analiz_motoru(sembol):
-    try:
-        df = yf.download(sembol, period="6mo", interval="1d", progress=False)
-        if df.empty: return "Veri çekilemedi."
+# 2. SAAT KONTROLÜ FONKSİYONU
+def is_active_hours():
+    """Gece 00:00 ile 10:00 arası False döner, bu saatlerde bot çalışmaz."""
+    now = datetime.datetime.now().hour
+    if 0 <= now < 10:
+        return False
+    return True
 
-        # Teknik Göstergeler
-        df['RSI'] = ta.rsi(df['Close'], length=14)
-        df['SMA20'] = ta.sma(df['Close'], length=20)
-        
-        last_price = float(df['Close'].iloc[-1])
-        last_rsi = float(df['RSI'].iloc[-1])
-        sma20 = float(df['SMA20'].iloc[-1])
-        
-        # Hacim Analizi (Patlama kontrolü)
-        avg_vol = df['Volume'].tail(10).mean()
-        last_vol = df['Volume'].iloc[-1]
-        hacim_durumu = "Güçlü" if last_vol > avg_vol * 1.5 else "Zayıf"
+# 3. ANALİZ KOMUTU (Piyasa yorumu için taslak)
+async def analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Sadece senin mesajlarına yanıt verir
+    if update.effective_chat.id != MY_CHAT_ID:
+        return
 
-        # Stratejik Yorum
-        if last_rsi > 70:
-            yorum = f"⚠️ **Doygunluk!** RSI çok yüksek. Kar satışı makul olabilir. Geri alım için {sma20:.2f} seviyesi beklenebilir."
-        elif last_rsi < 35:
-            yorum = "💎 **Fırsat!** Herkes korkarken toplama bölgesi olabilir. Arkası dolu bir dönüş beklenebilir."
+    await update.message.reply_text(
+        "Teknik ve Temel Analiz süreci başlatıldı...\n"
+        "Günlük piyasa yorumu ve derin düşünme sonuçları birazdan iletilecek."
+    )
+    # Buraya ileride analiz yapan Python fonksiyonlarını bağlayabiliriz.
+
+async def main():
+    # Uygulamayı oluştur
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # /analiz komutunu kaydet
+    app.add_handler(CommandHandler("analiz", analiz_komutu))
+
+    print(f"Bot aktif. CHAT_ID: {MY_CHAT_ID} için çalışıyor.")
+
+    while True:
+        if is_active_hours():
+            try:
+                print(f"[{datetime.datetime.now()}] Aktif saatler: Bot başlatılıyor.")
+                
+                await app.initialize()
+                await app.start()
+                await app.updater.start_polling()
+
+                # Aktif saatler bitene kadar çalışmaya devam et
+                while is_active_hours():
+                    await asyncio.sleep(60)
+
+                # Saat 00:00 olduğunda güvenli kapatma
+                print(f"[{datetime.datetime.now()}] Saat 00:00: Kota koruması için bot durduruluyor.")
+                await app.updater.stop()
+                await app.stop()
+                await app.shutdown()
+
+            except Exception as e:
+                print(f"Bağlantı hatası: {e}")
+                await asyncio.sleep(60)
         else:
-            yorum = "☕ **Makul Bölge.** Şu an için büyük bir sapma yok, trendi izle."
-
-        return f"Fiyat: {last_price:.2f}\nRSI: {last_rsi:.1f}\nHacim: {hacim_durumu}\n💡 {yorum}"
-    except Exception as e:
-        return f"Analiz hatası: {e}"
-
-# Komutlar
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Merhaba! Ben senin Finansal Strateji Botunum. Bana bir varlık sorabilirsin (Örn: Gümüş ne olur?) veya /sepet yazarak genel durumu görebilirsin.")
-
-async def sepet_goster(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mesaj = "📊 **GÜNLÜK STRATEJİ SEPETİ**\n\n"
-    for isim, sembol in SEPET.items():
-        analiz = analiz_motoru(sembol)
-        mesaj += f"**{isim}**\n{analiz}\n\n---\n"
-    await update.message.reply_text(mesaj, parse_mode="Markdown")
-
-# Soru-Cevap Mantığı
-async def mesaj_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower()
-    
-    if "gümüş" in text or "gumus" in text:
-        res = analiz_motoru(SEPET["GUMUS"])
-        await update.message.reply_text(f"🥈 **Gümüş Analizim:**\n\n{res}", parse_mode="Markdown")
-    elif "altın" in text or "altin" in text:
-        res = analiz_motoru(SEPET["ALTIN"])
-        await update.message.reply_text(f"🥇 **Altın Analizim:**\n\n{res}", parse_mode="Markdown")
-    elif "bist" in text:
-        res = analiz_motoru(SEPET["BIST100"])
-        await update.message.reply_text(f"🇹🇷 **BIST 100 Analizim:**\n\n{res}", parse_mode="Markdown")
-    else:
-        await update.message.reply_text("Bunu henüz listeme almadım ama /sepet komutuyla genel durumu görebilirsin.")
+            # Uyku modu (10 dakikada bir kontrol eder)
+            await asyncio.sleep(600)
 
 if __name__ == '__main__':
-    # Railway'den TOKEN'ı alıyoruz
-    TOKEN = os.getenv("TELEGRAM_TOKEN")
-    app = Application.builder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("sepet", sepet_goster))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mesaj_isleyici))
-
-    app.run_polling()
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("Bot kapatıldı.")
